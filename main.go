@@ -120,11 +120,16 @@ func (g *Game) Update() error {
 		} else {
 			g.selectionActive = true
 			g.selectedTile = coord
-			g.selectionMoves = g.board.GetValidMoves(coord)
+			g.selectionMoves = g.board.GetValidMoves(coord, g.board.LastMove.Berserk)
 		}
 	} else if targetMoveIdx >= 0 {
 		g.board.MakeMove(g.selectionMoves[targetMoveIdx])
-		g.selectionActive = false
+		if g.board.LastMove.Berserk {
+			g.selectedTile = g.board.LastMove.To
+			g.selectionMoves = g.board.GetValidMoves(g.selectedTile, g.board.LastMove.Berserk)
+		} else {
+			g.selectionActive = false
+		}
 	}
 
 	fmt.Println("selection", g.selectionActive, g.selectedTile, len(g.selectionMoves))

@@ -39,6 +39,9 @@ type Move struct {
 	From     Coord
 	To       Coord
 	Captures []Coord
+	// Is this the beginning or continuation of a chain of berserk
+	// moves?
+	Berserk  bool
 }
 
 type Turn byte
@@ -48,14 +51,15 @@ const (
 	TurnDefender = 1
 )
 
+// The Berzerk rule works by allowing the player to play move than one
+// move in a row. So if the last move ended with a capture and there
+// are still more berzerk moves that can be chained together, then the
+// Turn remains unchanged.
 type Board struct {
 	Size    int
 	Squares []Piece
-	// Because of berserk moves, a "move" is a sequence of 1 or more
-	// Moves.
-	LastMove []Move
+	LastMove Move
 	Turn     Turn
-	// TODO: move history
 }
 
 func (b *Board) Idx(c Coord) int {
@@ -69,7 +73,7 @@ func NewBoard() Board {
 	b := Board{}
 	b.Size = size
 	b.Squares = make([]Piece, size*size)
-	b.LastMove = make([]Move, 0, 1)
+	//b.LastMove = 
 	b.Turn = TurnAttacker
 
 	// Place attacker pieces
@@ -106,7 +110,7 @@ func NewBoard() Board {
 	return b
 }
 
-func (b *Board) IsRestrictedCoord(c Coord) bool {
+func (b *Board) IsCornerCoord(c Coord) bool {
 	if c.X == 0 && c.Y == 0 {
 		return true
 	}
@@ -117,6 +121,13 @@ func (b *Board) IsRestrictedCoord(c Coord) bool {
 		return true
 	}
 	if c.X == b.Size-1 && c.Y == b.Size-1 {
+		return true
+	}
+	return false
+}
+
+func (b *Board) IsRestrictedCoord(c Coord) bool {
+	if b.IsCornerCoord(c) {
 		return true
 	}
 	if c.X == b.Size/2 && c.Y == b.Size/2 {
@@ -706,12 +717,11 @@ func (b *Board) GetValidMovesCommander(c Coord) []Move {
 }
 
 // Return valid moves for the piece at `c`
-func (b *Board) GetValidMoves(c Coord) []Move {
+func (b *Board) GetValidMoves(c Coord, berserk bool) []Move {
 	piece := b.PieceAt(c)
 	if piece == Empty {
 		return nil
 	}
-
 
 	// temporarily remove the piece at its current location to prevent
 	// the capture logic thinking it can sandwhich capture with
@@ -734,22 +744,21 @@ func (b *Board) GetValidMoves(c Coord) []Move {
 		moves = append(moves, b.GetValidMovesCommander(c)...)
 	}
 
+	// Filter out valid berserk moves.
+	// Note: The king may finish a berserk run with a winning move to a corner square.
+	if berserk {
+		berzerk_moves := make([]Move, 0)
+			for _, m := range moves {
+				if len(m.Captures) > 0 ||
+					(piece == King && b.IsCornerCoord(m.To)) {
+					berzerk_moves = append(berzerk_moves, m)
+				}
+			}
+		moves = berzerk_moves
+	}
+
 	// Put the piece back.
 	b.Squares[i] = tmp
-
-	// // Handle chains of berserk moves
-	// berserkMoves := make([]Move, 0)
-	// for _, m := range moves {
-	// 	if len(m.captures) == 0 {
-	// 		continue
-	// 	}
-	// 	newB := copy(b)
-	// 	newB = applyMove(newB, m)
-	// 	newMoves := newB.GetValidMoves(m.to)
-	// 	for _, nm := range newMoves {
-	// 		if len(nm
-	// 	}
-	// }
 
 	return moves
 }
@@ -758,6 +767,23 @@ func (b *Board) GetValidMoves(c Coord) []Move {
 // expected that move was picked from the slice returned by
 // GetValidMoves. TODO: handle berzerk moves.
 func (b *Board) MakeMove(move Move) {
+	// Not moving the piece is considered a pass. This is how a player
+	// stops a chain of berserk moves.
+	if move.From == move.To {
+		if b.LastMove.Berserk {
+			// a pass is not allowed!
+			return
+		}
+		// Amend the last move.
+		b.LastMove.Berserk = false
+		if b.Turn == TurnAttacker {
+			b.Turn = TurnDefender
+		} else {
+			b.Turn = TurnAttacker
+		}
+		return
+	}
+
 	from := b.Idx(move.From)
 	to := b.Idx(move.To)
 	b.Squares[to] = b.Squares[from]
@@ -768,11 +794,23 @@ func (b *Board) MakeMove(move Move) {
 		b.Squares[idx] = Empty
 	}
 
-	if b.Turn == TurnAttacker {
-		b.Turn = TurnDefender
-	} else {
-		b.Turn = TurnAttacker
+	// Check whether a berserk follow-up is possible
+	if len(move.Captures) > 0 {
+		berserk_moves := b.GetValidMoves(move.To, true)
+		if len(berserk_moves) > 0 {
+			move.Berserk = true
+		}
 	}
-	b.LastMove = make([]Move, 1)
-	b.LastMove[0] = move
+
+	// If berzerk moves are possible then it's still the current
+	// player's turn.
+	if !move.Berserk {
+		if b.Turn == TurnAttacker {
+			b.Turn = TurnDefender
+		} else {
+			b.Turn = TurnAttacker
+		}
+	}
+
+	b.LastMove = move
 }
