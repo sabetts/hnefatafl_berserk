@@ -459,7 +459,7 @@ func (b *Board) GetValidMovesKnight(c Coord) []Move {
 	for _, j := range jumps {
 		over := j[0]
 		land := j[1]
-		if b.ValidCoord(over) && b.ValidCoord(land) && b.PieceAt(over) == Attacker && b.PieceAt(land) == Empty {
+		if b.ValidCoord(over) && b.ValidCoord(land) && b.PieceAt(over) == Attacker && b.PieceAt(land) == Empty && !b.IsRestrictedCoord(land) {
 			// It's possible to land after jumping and capture pieces in
 			// the regular sandwhich manner.
 			caps := b.GetSandwichCaptures(Knight, land)
@@ -565,7 +565,7 @@ func (b *Board) GetValidMovesKing(c Coord) []Move {
 	for _, j := range jumps {
 		over := j[0]
 		land := j[1]
-		if b.ValidCoord(over) && b.ValidCoord(land) && b.PieceAt(over) == Attacker && b.PieceAt(land) == Empty {
+		if b.ValidCoord(over) && b.ValidCoord(land) && b.PieceAt(over) == Attacker && b.PieceAt(land) == Empty && (b.IsRestrictedCoord(c) || b.IsRestrictedCoord(land)){
 			// It's possible to land after jumping and capture pieces in
 			// the regular sandwhich manner.
 			caps := b.GetSandwichCaptures(King, land)
@@ -699,7 +699,7 @@ func (b *Board) GetValidMovesCommander(c Coord) []Move {
 	}
 
 	for _, j := range jumps {
-		if b.ValidCoord(j.over) && b.ValidCoord(j.land) && b.PieceAt(j.over) == Defender && b.PieceAt(j.land) == Empty {
+		if b.ValidCoord(j.over) && b.ValidCoord(j.land) && b.PieceAt(j.over) == Defender && b.PieceAt(j.land) == Empty && !b.IsRestrictedCoord(j.land) {
 			// It's possible to land after jumping and capture pieces
 			// in the regular sandwhich manner.
 			caps := b.GetAllCaptures(Commander, j.land)
