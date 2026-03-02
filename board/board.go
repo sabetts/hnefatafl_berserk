@@ -34,11 +34,16 @@ type Coord struct {
 	Y int
 }
 
+type Capture struct {
+	Piece Piece
+	Coord Coord
+}
+
 type Move struct {
 	Piece    Piece
 	From     Coord
 	To       Coord
-	Captures []Coord
+	Captures []Capture
 	// Is this the beginning or continuation of a chain of berserk
 	// moves?
 	Berserk  bool
@@ -60,6 +65,25 @@ type Board struct {
 	Squares []Piece
 	LastMove Move
 	Turn     Turn
+}
+
+func CopyBoard(b Board) Board {
+	dest := Board{}
+	dest.Size = b.Size
+	dest.Squares = make([]Piece, b.Size*b.Size)
+	_ = copy(dest.Squares, b.Squares)
+
+	// FIXME: Separate function?
+	dest.LastMove.Piece = b.LastMove.Piece
+	dest.LastMove.From = b.LastMove.From
+	dest.LastMove.To = b.LastMove.To
+	dest.LastMove.Captures = make([]Capture, len(b.LastMove.Captures))
+	_ = copy(dest.LastMove.Captures, b.LastMove.Captures)
+	dest.LastMove.Berserk = b.LastMove.Berserk
+
+	dest.Turn = b.Turn
+
+	return dest
 }
 
 func (b *Board) Idx(c Coord) int {
@@ -150,7 +174,7 @@ func (b *Board) PieceAtXY(x, y int) Piece {
 
 // Identifies the coordinates of any pieces that would be captured by
 // placing an `aggressor` piece at the coordinate.
-func (b *Board) GetSandwichCaptures(aggressor Piece, c Coord) []Coord {
+func (b *Board) GetSandwichCaptures(aggressor Piece, c Coord) []Capture {
 	eastCoord := Coord{c.X + 1, c.Y}
 	eastCoord2 := Coord{c.X + 2, c.Y}
 
@@ -170,7 +194,7 @@ func (b *Board) GetSandwichCaptures(aggressor Piece, c Coord) []Coord {
 		{northCoord, northCoord2},
 	}
 
-	captures := make([]Coord, 0, 4)
+	captures := make([]Capture, 0, 4)
 	for _, pair := range coords {
 		if !b.ValidCoord(pair[0]) {
 			continue
@@ -197,7 +221,7 @@ func (b *Board) GetSandwichCaptures(aggressor Piece, c Coord) []Coord {
 		}
 
 		if isCapture {
-			captures = append(captures, pair[0])
+			captures = append(captures, Capture{Piece: middle, Coord: pair[0]})
 		}
 	}
 
@@ -206,7 +230,7 @@ func (b *Board) GetSandwichCaptures(aggressor Piece, c Coord) []Coord {
 
 // Identifies if placing the piece at the `c` Coord captures the king
 // in a 4 piece capture.
-func (b *Board) GetKingFourWayCapture(aggressor Piece, c Coord) []Coord {
+func (b *Board) GetKingFourWayCapture(aggressor Piece, c Coord) []Capture {
 	type capture struct {
 		middle Coord
 		others [3]Coord
@@ -251,7 +275,7 @@ func (b *Board) GetKingFourWayCapture(aggressor Piece, c Coord) []Coord {
 		},
 	}
 
-	captures := make([]Coord, 0, 4)
+	captures := make([]Capture, 0, 4)
     if !IsAttackerSide(aggressor) {
 		return captures
 	}
@@ -278,7 +302,7 @@ outerLoop:
 		}
 
 		// The king is captured!!
-		captures = append(captures, cap.middle)
+		captures = append(captures, Capture{Piece: middle, Coord: cap.middle})
 	}
 
 	return captures
@@ -287,7 +311,7 @@ outerLoop:
 // Identifies if placing the piece at the `c` Coord captures the king
 // in a 2 piece capture. The King can be captured between 2 Commanders
 // or a Commander and an empty restricted square.
-func (b *Board) GetKingTwoWayCapture(aggressor Piece, c Coord) []Coord {
+func (b *Board) GetKingTwoWayCapture(aggressor Piece, c Coord) []Capture {
 	type capture struct {
 		middle Coord
 		other Coord
@@ -316,7 +340,7 @@ func (b *Board) GetKingTwoWayCapture(aggressor Piece, c Coord) []Coord {
 		},
 	}
 
-	captures := make([]Coord, 0, 4)
+	captures := make([]Capture, 0, 4)
     if aggressor != Commander {
 		return captures
 	}
@@ -332,21 +356,16 @@ func (b *Board) GetKingTwoWayCapture(aggressor Piece, c Coord) []Coord {
 			continue
 		}
 		o := b.PieceAt(cap.other)
-		if o == Empty && !b.IsRestrictedCoord(cap.other) {
-			continue
+		if o == Commander || (o == Empty && b.IsRestrictedCoord(cap.other)) {
+			// The king is captured!!
+			captures = append(captures, Capture{Piece: middle, Coord: cap.middle})
 		}
-		if o != Commander {
-			continue
-		}
-
-		// The king is captured!!
-		captures = append(captures, cap.middle)
 	}
 
 	return captures
 }
 
-func (b *Board) GetAllCaptures(aggressor Piece, c Coord) []Coord {
+func (b *Board) GetAllCaptures(aggressor Piece, c Coord) []Capture {
 	c1 := b.GetSandwichCaptures(aggressor, c)
 	c2 := b.GetKingTwoWayCapture(aggressor, c)
 	c3 := b.GetKingFourWayCapture(aggressor, c)
@@ -463,7 +482,7 @@ func (b *Board) GetValidMovesKnight(c Coord) []Move {
 			// It's possible to land after jumping and capture pieces in
 			// the regular sandwhich manner.
 			caps := b.GetSandwichCaptures(Knight, land)
-			caps = append(caps, over)
+			caps = append(caps, Capture{Piece: b.PieceAt(over), Coord:over})
 			m := Move{
 				Piece:    Knight,
 				From:     c,
@@ -770,7 +789,7 @@ func (b *Board) MakeMove(move Move) {
 	// Not moving the piece is considered a pass. This is how a player
 	// stops a chain of berserk moves.
 	if move.From == move.To {
-		if b.LastMove.Berserk {
+		if !b.LastMove.Berserk {
 			// a pass is not allowed!
 			return
 		}
@@ -790,7 +809,7 @@ func (b *Board) MakeMove(move Move) {
 	b.Squares[from] = Empty
 
 	for _, c := range move.Captures {
-		idx := b.Idx(c)
+		idx := b.Idx(c.Coord)
 		b.Squares[idx] = Empty
 	}
 
