@@ -45,7 +45,7 @@ var (
 	//go:embed ai_assets/commander.png
 	Commander_png []byte
 
-	//go:embed ai_assets/board_final.png
+	//go:embed ai_assets/board.png
 	Board_png []byte
 
 	//go:embed ai_assets/blood.png
