@@ -10,6 +10,10 @@ has some unusual and intriguing features:
 * There is only one king
 * Sides have different piece types
 
+The attacker's objective is to capture the king by surrounding it on all 4 sides.
+
+The defender's objective is to get the king to one of the four corners of the board.
+
 # Berserk
 
 The berserk variant adds new pieces and rules, most notably chaining
