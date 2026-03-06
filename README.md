@@ -1,3 +1,5 @@
+![Hnefatafl Board](ai_assets/demo.png)
+
 # Viking Chess
 
 Hnefatafl is a Scandinavian board game somewhat similar to Chess. It
