@@ -1,5 +1,10 @@
 package board
 
+import (
+	"fmt"
+	"log"
+)
+
 type Piece byte
 
 const (
@@ -132,6 +137,43 @@ func NewBoard() Board {
 	b.Squares[b.Idx(Coord{size / 2, size/2 + 2})] = Defender
 
 	return b
+}
+
+func (b *Board) Print() {
+	// top
+	fmt.Print("+")
+	for i := 0; i<b.Size; i++ {
+		fmt.Print("-")
+	}
+	fmt.Print("+\n")
+	for y := range b.Size {
+		fmt.Print("|")
+		for x := range b.Size {
+			p := b.PieceAtXY(x,y)
+			switch p {
+			case Empty:
+				if b.IsRestrictedCoord(Coord{X:x,Y:y}) {
+					fmt.Print("X")
+				} else {
+					fmt.Print(".")
+				}
+			case King: fmt.Print("K")
+			case Knight: fmt.Print("N")
+			case Defender: fmt.Print("D")
+			case Attacker: fmt.Print("A")
+			case Commander: fmt.Print("C")
+			default:
+				log.Fatal("Unknown piece")
+			}
+		}
+		fmt.Print("|\n")
+	}
+	// bottom
+	fmt.Print("+")
+	for i := 0; i<b.Size; i++ {
+		fmt.Print("-")
+	}
+	fmt.Print("+\n")
 }
 
 func (b *Board) IsCornerCoord(c Coord) bool {
@@ -832,4 +874,54 @@ func (b *Board) MakeMove(move Move) {
 	}
 
 	b.LastMove = move
+}
+
+func (b *Board) IsGameOver() bool {
+	var king_exists = false
+	var attacker_exists = false
+	for y := range b.Size {
+		for x := range b.Size {
+			p := b.PieceAtXY(x,y)
+			if p == King {
+				king_exists = true
+				if b.IsCornerCoord(Coord{X:x,Y:y}) {
+					return true
+				}
+			} else if IsAttackerSide(p) {
+				attacker_exists = true
+			}
+		}
+	}
+	// The assumption is that the king was captured and is no longer
+	// on the board. FIXME: Might be better to check LastMove and see
+	// if a king was among the pieces captured?
+	if !king_exists {
+		return true
+	}
+	if !attacker_exists {
+		return true
+	}
+	// It's possible there are no moves to make. So check.
+	can_move := false
+outer:
+	for y := range b.Size {
+		for x := range b.Size {
+			p := b.PieceAtXY(x,y)
+			if p == Empty {
+				continue
+			}
+			if IsAttackerSide(p) && b.Turn == TurnDefender {
+				continue
+			}
+			if IsDefenderSide(p) && b.Turn == TurnAttacker {
+				continue
+			}
+			m := b.GetValidMoves(Coord{X:x, Y:y}, b.LastMove.Berserk)
+			if len(m) > 0 {
+				can_move = true
+				break outer
+			}
+		}
+	}
+	return !can_move
 }

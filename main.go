@@ -16,6 +16,13 @@ import (
 	"fmt"
 
 	"berzerk/board"
+	"berzerk/mcts"
+	"math/rand"
+	"time"
+
+	"io"
+	"os/exec"
+	"os"
 )
 
 // Image assets
@@ -101,6 +108,8 @@ const boardOffsetY = 138
 
 const tileWidth = 106
 const tileHeight = 107
+
+const moveSpeed = 0.2
 
 func PixelToCoord(b *board.Board, x, y int) (board.Coord, bool) {
 	x -= boardOffsetX
@@ -193,11 +202,15 @@ type Game struct {
 	// piece movement
 	movingActive bool
 	movingPercent float32
+	// MCTS
+	BestMoveActive bool
+	BestMoveChan chan board.Move
 }
 
 func NewGame() *Game {
 	g := &Game{}
 	g.board = board.NewBoard()
+	g.BestMoveChan = make(chan board.Move, 1)
 	return g
 }
 
@@ -232,6 +245,21 @@ func (g *Game) HandleUndo() {
 		g.selectionActive = false
 	}
 	g.movingActive = false
+}
+
+func (g *Game)MakeMove(move board.Move) {
+	g.allCaptures = append(g.allCaptures, g.board.LastMove.Captures...)
+	g.history = append(g.history, board.CopyBoard(g.board))
+	clear(g.future)
+	g.board.MakeMove(move)
+	if g.board.LastMove.Berserk {
+		g.selectedTile = g.board.LastMove.To
+		g.selectionMoves = g.board.GetValidMoves(g.selectedTile, g.board.LastMove.Berserk)
+	} else {
+		g.selectionActive = false
+	}
+	g.movingActive = true
+	g.movingPercent = 0
 }
 
 func (g *Game) HandleClick() {
@@ -273,18 +301,7 @@ func (g *Game) HandleClick() {
 			g.selectionMoves = g.board.GetValidMoves(coord, g.board.LastMove.Berserk)
 		}
 	} else if targetMoveIdx >= 0 {
-		g.allCaptures = append(g.allCaptures, g.board.LastMove.Captures...)
-		g.history = append(g.history, board.CopyBoard(g.board))
-		clear(g.future)
-		g.board.MakeMove(g.selectionMoves[targetMoveIdx])
-		if g.board.LastMove.Berserk {
-			g.selectedTile = g.board.LastMove.To
-			g.selectionMoves = g.board.GetValidMoves(g.selectedTile, g.board.LastMove.Berserk)
-		} else {
-			g.selectionActive = false
-		}
-		g.movingActive = true
-		g.movingPercent = 0
+		g.MakeMove(g.selectionMoves[targetMoveIdx])
 	}
 
 	// blood stain for captures. but they fade into faded blood stains
@@ -295,15 +312,34 @@ func (g *Game) HandleClick() {
 	fmt.Println("selection", g.selectionActive, g.selectedTile, len(g.selectionMoves))
 }
 
+// FIXME: dont use global
+var globalRand *rand.Rand
+
 func (g *Game) Update() {
 	g.HandleClick()
 
 	if g.movingActive {
-		g.movingPercent += 0.1
+		g.movingPercent += moveSpeed
 		if g.movingPercent >= 1 {
 			g.movingActive = false
 		}
+		}
+	// } else if !g.board.IsGameOver(){
+	// 	moves := mcts.GetPossibleMoves(g.board)
+	// 	choice := mcts.PickMoveRandom(globalRand, moves)
+	// 	//choice := mcts.PickMoveCaptureAggressively(globalRand, moves)
+	// 	g.board.MakeMove(moves[choice])
+	// 	g.movingActive = true
+	// 	g.movingPercent = 0
+	// }
+
+	select {
+	case bestMove := <-g.BestMoveChan:
+		g.BestMoveActive = false
+		g.MakeMove(bestMove)
+	default:
 	}
+
 }
 
 func (g *Game) Draw(screen *ebiten.Image) {
@@ -340,6 +376,31 @@ func (g *Game) Draw(screen *ebiten.Image) {
 		s := img.Bounds().Size()
 		op.GeoM.Translate(-float64(s.X)/2, -float64(s.Y)/2)
 		screen.DrawImage(img, op)
+	}
+
+	if !g.movingActive && g.board.LastMove.From != g.board.LastMove.To {
+		// draw start and end of the last move
+		const margin = 10
+		vector.StrokeRect(
+			screen,
+			float32(boardOffsetX + margin + g.board.LastMove.From.X * tileWidth),
+			float32(boardOffsetY + margin + g.board.LastMove.From.Y * tileHeight),
+			tileWidth - margin*2,
+			tileHeight - margin*2,
+			2,
+			color.RGBA{0xff, 0xff, 0xff, 0xff},
+			true,
+		)
+		vector.StrokeRect(
+			screen,
+			float32(boardOffsetX + margin + g.board.LastMove.To.X * tileWidth),
+			float32(boardOffsetY + margin + g.board.LastMove.To.Y * tileHeight),
+			tileWidth - margin*2,
+			tileHeight - margin*2,
+			2,
+			color.RGBA{0xff, 0xff, 0xff, 0xff},
+			true,
+		)
 	}
 
 	// Now draw all the stationary pieces
@@ -427,8 +488,11 @@ type UI struct {
 	BackupGame *Game
 	Done Button
 	Undo Button
+	MCTS Button
 	Restart Button
 	Quit Button
+	ffmpegStream io.WriteCloser
+	PixelBuf []byte
 }
 
 
@@ -440,6 +504,7 @@ func (ui *UI) Update() error {
 	ui.Game.UpdateMouse(pressed, click, x,y)
 	ui.Done.UpdateMouse(pressed, click, x,y)
 	ui.Undo.UpdateMouse(pressed, click, x,y)
+	ui.MCTS.UpdateMouse(pressed, click, x,y)
 	ui.Restart.UpdateMouse(pressed, click, x,y)
 	ui.Quit.UpdateMouse(pressed, click, x,y)
 
@@ -456,6 +521,25 @@ func (ui *UI) Update() error {
 			ui.BackupGame = nil
 		} else {
 			ui.Game.HandleUndo()
+		}
+	}
+
+	if ui.MCTS.clicked {
+		if ui.Game.BestMoveActive {
+			fmt.Println("Already in progress!")
+		} else {
+			go func (bestMove chan<- board.Move) {
+				moves, ratings := mcts.RateMoves(100, ui.Game.board)
+				fmt.Println(ratings)
+				max_id := 0
+				for i, r := range ratings {
+					if r > ratings[max_id] {
+						max_id = i
+					}
+				}
+				bestMove <- moves[max_id]
+			}(ui.Game.BestMoveChan)
+			ui.Game.BestMoveActive = true
 		}
 	}
 
@@ -478,15 +562,33 @@ func (ui *UI) Update() error {
 }
 
 func (ui *UI) Draw(screen *ebiten.Image) {
-	screen.Fill(color.RGBA{0x80, 0x80, 0xc0, 0xff})
-	vector.FillRect(screen, 2000, 100, 500, 200, color.White, false)
+	// screen.Fill(color.RGBA{0x80, 0x80, 0xc0, 0xff})
+	// vector.FillRect(screen, 2000, 100, 500, 200, color.White, false)
 
 	ui.Game.Draw(screen)
 
 	ui.Done.Draw(screen)
 	ui.Undo.Draw(screen)
+	ui.MCTS.Draw(screen)
 	ui.Restart.Draw(screen)
 	ui.Quit.Draw(screen)
+
+	if ui.ffmpegStream != nil {
+		//ok, err := screen.ReadPixels(ui.PixelBuf)
+		screen.ReadPixels(ui.PixelBuf)
+		// if err != nil {
+		// 	log.Fatal(err)
+		// }
+		// if !ok {
+		// 	log.Fatal("ReadPixels failed")
+		// }
+		_, err := ui.ffmpegStream.Write(ui.PixelBuf)
+		if err != nil {
+			log.Println("FFMpeg is unhappy", err)
+		} else {
+			// log.Println("all good")
+		}
+	}
 }
 
 func (ui *UI) Layout(outsideWidth, outsideHeight int) (int, int) {
@@ -603,10 +705,19 @@ func NewUI() *UI {
 		},
 		label: "Undo",
 	}
+	ui.MCTS = Button{
+		UIElement: UIElement{
+			x: boardSize.X,
+			y: (buttonSize.Y + pad)*2,
+			w: buttonSize.X,
+			h: buttonSize.Y,
+		},
+		label: "MCTS",
+	}
 	ui.Restart = Button{
 		UIElement: UIElement{
 			x: boardSize.X,
-			y: (buttonSize.Y+pad)*2,
+			y: (buttonSize.Y+pad)*3,
 			w: buttonSize.X,
 			h: buttonSize.Y,
 		},
@@ -615,7 +726,7 @@ func NewUI() *UI {
 	ui.Quit = Button{
 		UIElement: UIElement{
 			x: boardSize.X,
-			y: (buttonSize.Y+pad)*3,
+			y: (buttonSize.Y+pad)*4,
 			w: buttonSize.X,
 			h: buttonSize.Y,
 		},
@@ -626,7 +737,45 @@ func NewUI() *UI {
 }
 
 func main() {
-	err := loadImages()
+	cmd := exec.Command("ffmpeg",
+		"-y",
+		"-f", "rawvideo",
+		"-pixel_format", "rgba",
+		"-video_size", fmt.Sprintf("%dx%d",screenWidth*2, screenHeight*2),
+		"-i", "pipe:0",
+		"-c:v", "libx264",
+		"-pix_fmt", "yuv420p",
+		"-preset", "ultrafast",
+		"output.mp4",
+	)
+
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	cmd.Stderr = os.Stderr
+	cmd.Stdout = os.Stdout
+
+	//cmd.Start()
+
+	// stdout, err := cmd.StdoutPipe()
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
+	// fmt.Println("read")
+	// blah := make([]byte, 1024)
+	// _, err = stdout.Read(blah)
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
+
+	// fmt.Println(blah)
+
+	globalRand = rand.New(rand.NewSource(time.Now().UnixNano()))
+	// rand.Seed(time.Now().UnixNano())
+
+	err = loadImages()
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -634,6 +783,9 @@ func main() {
 	ebiten.SetWindowSize(screenWidth, screenHeight)
 
 	ui := NewUI()
+	// ui.ffmpegStream = stdin
+	_ = stdin
+	ui.PixelBuf = make([]byte, screenWidth*2*screenHeight*2*4)
 
 	if err := ebiten.RunGame(ui); err != nil {
 		log.Fatal(err)
