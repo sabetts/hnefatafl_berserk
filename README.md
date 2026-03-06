@@ -16,6 +16,17 @@ this for the complete rules and history of the variant:
 
 https://aagenielsen.dk/berserk_rules.php
 
+# Over The Board Only
+
+This implementation of Hnefatafl is purely local. It is a virtual
+board on which two players can play the game "over the board".
+
+It is written in Go using Ebitengine, which means it can be run in a
+graphics window or compiled to WASM and embedded in a web
+page. However, due to Ebitengine's continuous redraw, it is
+unnecessarily resource wasteful. Perhaps there is a way to have
+Ebitengine update the graphics only as needed?
+
 # Monte Carlo Tree Search
 
 This implementation has a very rudimentary implementation of MCTS that
